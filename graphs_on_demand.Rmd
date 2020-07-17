@@ -1,0 +1,655 @@
+---
+title: "Graphs on-demand"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(shiny)
+library(tidyverse)
+library(colorspace)
+library(viridis)
+library(stringr)
+library(tidyr)
+library(lubridate)
+
+calcula_valor_constante <- function(df_dados_hist, data_constante ){
+ #Argumentos
+ #df_dados_hist: dataframe em que as duas primeiras colunas são formadas por uma data (Y-m-d) e um valor
+ #data_constante: data para gerar valor constante. Formato da data: Y-m-d
+ 
+ #Por enquanto as datas estão limitadas à da série temporal baixada do IPCA Total do portal de dados abertos do BACEN
+ #Essa série começa em 1992-01-01
+  
+  library(dplyr)
+  library(lubridate)
+  
+  names(df_dados_hist)[1:2]<- c("data","valor")
+
+  ###faz a conversão para real
+  df_dados_hist<-
+  df_dados_hist %>%
+    mutate(valor= case_when(
+      data>= ymd("1993-08-01") & data<= ymd("1994/02/28") ~ valor/(1000*2.75),
+      #data>= ymd("1992-01-01") & data<= ymd("1993/07/31") ~ valor/(1000^2*2.75),
+      #data>= ymd("1993-08-01") & data<= ymd("1994/06/30") ~ valor/(1000*2.75), #Adaptado para as necessidades da base que já converteu para real os valores a partir de 03/1994
+      
+      TRUE ~ valor 
+    ))
+  
+  #################Cálculos econômicos
+  #Dados do IPCA com a série temporal
+  
+  download.file("http://api.bcb.gov.br/dados/serie/bcdata.sgs.4449/dados?formato=csv", destfile = "bcdata.sgs.4449.csv")
+  
+  IPCA_historico <- read_delim("bcdata.sgs.4449.csv", 
+                               ";", escape_double = FALSE, locale = locale(decimal_mark = ",", 
+                                                                           grouping_mark = "."), trim_ws = TRUE)
+  IPCA_historico<-
+  IPCA_historico %>%
+    filter(data<= ymd(data_constante))
+  
+  #################Cálculos econômicos
+  #Calcula o número índice para todos os meses da série temporal
+  num_index<-
+    map_dbl(1:NROW(IPCA_historico), function(a_i){
+      if (a_i==1){
+        100
+      }else {
+        100+ prod(1+IPCA_historico$valor[1:a_i]/100)
+      }
+      
+    })
+  
+  IPCA_historico$num_indice <- num_index
+  
+  num_indice_constante<-
+    (IPCA_historico%>%
+    filter(dmy(data)== ymd(data_constante)))$num_indice
+  
+  
+  #################Cálculos econômicos
+  #Acrescenta a coluna do número índice
+  IPCA_historico$num_indice <- num_index
+  
+  IPCA_historico_trab<-
+    IPCA_historico %>%
+    mutate(data= dmy(data))  %>%
+    filter(data %in% df_dados_hist$data) %>%
+    select(data,num_indice)
+  
+  df_dados_hist %>%
+    inner_join(IPCA_historico_trab) %>%
+    mutate(valor = valor * (num_indice_constante/num_indice)) %>%
+    select(valor)
+  
+}
+
+df_graph<- readRDS(file="df_trabalho.rds")
+
+# df_graph <- df_graph[,-c(14:17)]
+# 
+# df_val_rendimento_bruto_atu<-calcula_valor_constante(df_graph[,c(1,8)],"2020-05-01" )
+# #names(df_val_rendimento_bruto_atu)[1]<- "Data Processamento"
+# names(df_val_rendimento_bruto_atu)[1]<- "total_rendimento_bruto_atu"
+# 
+# df_val_max_rendimento_bruto_atu<-calcula_valor_constante(df_graph[,c(1,9)],"2020-05-01" )
+# names(df_val_max_rendimento_bruto_atu)[1]<- "max_rendimento_bruto_atu"
+# #names(df_val_max_rendimento_bruto_atu)[2]<- "max_rendimento_bruto_atu"
+# 
+# df_val_total_rendimento_iquido_atu<-calcula_valor_constante(df_graph[,c(1,10)],"2020-05-01" )
+# names(df_val_total_rendimento_iquido_atu)[1]<- "total_rendimento_liquido_atu"
+# #names(df_val_total_rendimento_iquido_atu)[2]<- "total_rendimento_iquido_atu"
+# 
+# df_val_max_rendimento_liquido_atu<-calcula_valor_constante(df_graph[,c(1,11)],"2020-05-01" )
+# names(df_val_max_rendimento_liquido_atu)[1]<- "max_rendimento_liquido_atu"
+# #names(df_val_max_rendimento_liquido_atu)[2]<- "max_rendimento_liquido_atu"
+# 
+# df_graph<-
+# df_graph %>%
+#   bind_cols(df_val_max_rendimento_bruto_atu,
+#             df_val_max_rendimento_liquido_atu,
+#             df_val_rendimento_bruto_atu,
+#             df_val_total_rendimento_iquido_atu)
+# 
+# df_trabalho<- df_graph
+
+#saveRDS(df_trabalho, "df_trabalho.rds")
+
+df_graph<- 
+  df_graph %>%
+  mutate(`TIPO PENSAO`= str_replace_all(`TIPO PENSAO`, "[^[A-Za-z0-9/%,]]", " ") %>% str_squish(.)  %>% str_replace_all(.," , ", ", "))
+
+
+  
+  
+
+get_choices<- function(df_trabalho){
+  (df_trabalho %>%
+     filter(!is.na(`TIPO DE BENEFICIARIO`)) %>%
+     mutate(`TIPO DE BENEFICIARIO`= stringr::str_remove_all(`TIPO DE BENEFICIARIO`,"\\xe3")) %>%
+    distinct(`TIPO DE BENEFICIARIO`))$`TIPO DE BENEFICIARIO`
+}
+
+get_categoric_variables<- function(df_trabalho){
+  
+  classe<-sapply(df_trabalho, class)
+  
+  names(df_trabalho)[classe =="character"]
+  
+}
+
+
+get_numeric_variables<- function(df_trabalho){
+  
+  classe<-sapply(df_trabalho, class)
+  
+  names(df_graph)[classe %in% c("numeric", "integer")]
+  
+}
+
+get_date_variables <- function(df_trabalho){
+  
+  classe<-sapply(df_trabalho, class)
+  
+  names(df_graph)[classe == "Date"]
+  
+}
+
+```
+
+Análises de ranking
+=====================================  
+
+Inputs {.sidebar}
+-------------------------------------
+
+
+```{r}
+library(stringr)
+
+tipo_grafico<- c("Barra", "Linha", "Ponto")
+
+dateRangeInput("data",
+                  "Data processamento",
+                  min = "1994-01-01",
+                  max = "2020-05-01",
+                  start = "2020-05-01",
+                  end = "2020-05-01",
+                  language = "pt-BR",
+                  startview ="year",
+                  format="dd/mm/yyyy",
+                  separator = "até"
+      )
+ 
+
+
+
+# selectInput("doencas","Doenças Respiratorias (default:Todas)",choices = choices_doencas, selected = "Todas Doenças Respiratórias", multiple =  TRUE)
+
+selectInput ("var_h","Escolha a variável para eixo horizontal", choices =get_categoric_variables(df_graph), selected = get_categoric_variables(df_graph)[1] ,multiple = FALSE)
+
+selectInput ("var_v","Escolha a variável para eixo vertical", choices =get_numeric_variables(df_graph), selected = get_numeric_variables(df_graph)[1] ,multiple = FALSE)
+
+selectInput ("var_op","Que operação você deseja fazer com a variável do eixo vertical?", choices = c("Soma","Média","Mediana", "Máximo"), selected = "Soma" ,multiple = FALSE)
+
+
+selectInput ("var_fill","Escolha a variável para preencher a barra", choices =get_categoric_variables(df_graph) ,selected = get_numeric_variables(df_graph)[1],multiple = FALSE)
+
+selectInput ("var_filtro","Selecione tipos de beneficiários", choices = get_choices(df_graph) ,selected = "Tudo",multiple = TRUE)
+
+#radioButtons("tp_graph","Escolha o tipo de gráfico", choices =tipo_grafico, selected = tipo_grafico[1])
+
+checkboxInput("rotate","Rotacionar eixo", value = TRUE)
+
+
+
+```
+
+
+Column {.tabset .tabset-fade}
+-----------------------------------------------------------------------
+
+### Construa o seu gráfico de barras
+
+```{r}
+renderPlot({
+  
+
+  
+  if(is.null(input$var_filtro)){
+    tipo_sel<- get_choices(df_graph)
+  } else{
+    tipo_sel<- input$var_filtro
+  }
+  
+  varh<-input$var_h
+  
+  varv<- input$var_v
+  
+  var_fill<- input$var_fill
+  
+  # 
+  # df_trabalho<-
+  # df_graph %>%
+  #   mutate(`TIPO DE BENEFICIARIO`= stringr::str_remove_all(`TIPO DE BENEFICIARIO`,"\\xe3")) %>%
+  #   filter(`Data Processamento`== "2020-05-01")
+  
+  
+  
+  df_graph_bar <-
+    df_graph %>%
+    mutate(`TIPO DE BENEFICIARIO`= stringr::str_remove_all(`TIPO DE BENEFICIARIO`,"\\xe3")) %>%
+    filter(`Data Processamento`>= input$data[1] & `Data Processamento`<= input$data[2],
+           #!!sym(varh) %in% var_sel$selected,
+           `TIPO DE BENEFICIARIO` %in% tipo_sel)
+  
+  if (input$var_op == "Nenhuma"){
+    
+    #print("nenhuma operação" )
+    
+    df_graph_bar <-
+      df_graph_bar %>%
+      mutate(VD = !!sym(varv)) %>%
+      select(!!sym(varh), !!sym(var_fill),VD)
+    
+  } else {
+    print(input$var_op )
+    print(varv)
+    
+
+    df_graph_bar <-
+      df_graph_bar %>%
+      group_by(!!sym(varh), !!sym(var_fill)) %>%
+      summarise(
+       VD = case_when(
+          input$var_op == "Soma" ~ sum(as.numeric(!!sym(varv)),na.rm = TRUE),
+          input$var_op == "Média" ~ mean(as.numeric(!!sym(varv)),na.rm = TRUE),
+          input$var_op == "Mediana" ~ median(as.numeric(!!sym(varv)),na.rm = TRUE),
+          input$var_op == "Máximo" ~ max(as.numeric(!!sym(varv),na.rm = TRUE)))
+      
+        
+      )%>%
+      ungroup() 
+      #saveRDS(df_graph_bar, "df_graph_bar.rds")
+    
+    
+  }
+  
+  print("df_graph_bar")
+  print(df_graph_bar)
+  
+  
+  
+  graph_bar<-
+    df_graph_bar %>%
+    #top_n(20,total) %>%
+    mutate(VI = reorder(!!sym(varh), VD)) %>%
+    ggplot(aes(x=VI, y= VD)) +
+    geom_col(color = "white")+
+    scale_y_continuous(labels=function(x) format(x, big.mark = ".", scientific = FALSE)) +
+    #scale_color_discrete_qualitative(palette = "Dark 3")+
+    theme_light()+ 
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text()
+      
+    )#+
+  #labs(x= !!sym(varh),
+  #y= !!sym(varv))
+  
+  if(input$rotate){
+    graph_bar<-
+      graph_bar +
+      coord_flip()
+    
+  }
+  
+  if(var_fill == varh ){
+    graph_bar<-
+      graph_bar +
+      geom_col()
+  } else{
+    graph_bar<-
+      graph_bar +
+      geom_col(aes(fill= !!sym(var_fill) ))+
+      scale_fill_viridis(discrete=TRUE, option = "E") 
+  }
+  
+  print("äntes do graph_bar" )
+  graph_bar
+  
+  
+})
+
+```
+
+
+### Manipule os dados de seu filtro
+```{r}
+library(DT)
+renderDataTable({
+  
+  if(is.null(input$var_filtro)){
+    tipo_sel<- get_choices(df_graph)
+  } else{
+    tipo_sel<- input$var_filtro
+  }
+  
+  varh<-input$var_h
+  
+  varv<- input$var_v
+  
+  var_fill<- input$var_fill
+  
+  # 
+  # df_trabalho<-
+  # df_graph %>%
+  #   mutate(`TIPO DE BENEFICIARIO`= stringr::str_remove_all(`TIPO DE BENEFICIARIO`,"\\xe3")) %>%
+  #   filter(`Data Processamento`== "2020-05-01")
+  
+  print(input$data[1])
+  print(input$data[2])
+  
+  df_graph_bar <-
+    df_graph %>%
+    mutate(`TIPO DE BENEFICIARIO`= stringr::str_remove_all(`TIPO DE BENEFICIARIO`,"\\xe3")) %>%
+    filter(`Data Processamento`>= input$data[1] & `Data Processamento`<= input$data[2],
+           #!!sym(varh) %in% var_sel$selected,
+           `TIPO DE BENEFICIARIO` %in% tipo_sel)
+  
+  if (input$var_op == "Nenhuma"){
+    
+    #print("nenhuma operação" )
+    
+    df_graph_bar <-
+      df_graph_bar %>%
+      mutate(VD = !!sym(varv)) %>%
+      select(!!sym(varh), !!sym(var_fill),VD)
+    
+  } else {
+    print(input$var_op )
+    print(varv)
+    
+    
+    df_graph_bar <-
+      df_graph_bar %>%
+      group_by(!!sym(varh), !!sym(var_fill)) %>%
+      summarise(
+        VD = case_when(
+          input$var_op == "Soma" ~ sum(as.numeric(!!sym(varv)),na.rm = TRUE),
+          input$var_op == "Média" ~ mean(as.numeric(!!sym(varv)),na.rm = TRUE),
+          input$var_op == "Mediana" ~ median(as.numeric(!!sym(varv)),na.rm = TRUE),
+          input$var_op == "Máximo" ~ max(as.numeric(!!sym(varv),na.rm = TRUE)))
+        
+        
+      )%>%
+      ungroup() 
+    #saveRDS(df_graph_bar, "df_graph_bar.rds")
+    
+    
+  }
+  
+  
+  DT::datatable(
+    
+    df_graph_bar,
+    filter = "top",
+    rownames = FALSE,
+    fillContainer = TRUE,
+    
+    extensions = 'Buttons', options = list(
+      dom = 'Bfrtip',
+      #columnDefs = list(list(targets = c(-13), searchable = TRUE)),
+      pageLength = NROW(df_graph_bar),
+      buttons = c('copy', 'csv', 'excel', 'pdf', 'print')
+    )
+  ) %>% formatRound(ifelse(NCOL(df_graph_bar)==2,2,3),digits = 2, mark=".", dec.mark= ",")%>% formatDate(c(6,11,12),  method =  "toLocaleDateString") 
+  
+  
+})
+```
+
+
+Gráfico de análise de série temporal
+=====================================  
+
+Inputs {.sidebar}
+-------------------------------------
+
+
+```{r}
+library(stringr)
+
+
+dateRangeInput("data_st",
+                  "Intervalo da série",
+                  min = "1994-01-01",
+                  max = "2020-05-01",
+                  start = "1994-01-01",
+                  end = "2020-05-01",
+                  language = "pt-BR",
+                  startview ="year",
+                  format="dd/mm/yyyy",
+                  separator = "até"
+      )
+
+
+selectInput ("var_v_st","Escolha a variável para eixo vertical", choices =get_numeric_variables(df_graph), selected = get_numeric_variables(df_graph)[1] ,multiple = FALSE)
+
+selectInput ("var_op_st","Que operação você deseja fazer com a variável do eixo vertical?", choices = c("Soma","Média","Mediana", "Máximo"), selected = "Soma" ,multiple = FALSE)
+
+
+selectInput ("var_group","Escolha a variável para agrupamento", choices =c("Nenhuma",get_categoric_variables(df_graph)) ,selected = "Nenhuma",multiple = FALSE)
+
+
+selectInput ("var_filtro_st","Selecione tipos de beneficiários", choices = get_choices(df_graph) ,selected = "tudo",multiple = TRUE)
+
+```
+
+Column {.tabset .tabset-fade}
+-----------------------------------------------------------------------
+### Construa a sua série temporal
+
+```{r}
+#library(plotly)
+library(dygraphs)
+library(stats)
+
+
+renderDygraph({
+  
+  library(dygraphs)
+
+  if(is.null(input$var_filtro_st)){
+    tipo_sel<- get_choices(df_graph)
+  } else{
+    tipo_sel<- input$var_filtro_st
+  }
+  var_group<- input$var_group
+  
+  if(var_group == "Nenhuma"){
+    df_graph$total <- "Total"
+    var_group<- "total"
+  }
+  
+  varv<- input$var_v_st
+  
+  
+  df_dygraph<-
+  df_graph %>%
+    mutate(`TIPO DE BENEFICIARIO`= stringr::str_remove_all(`TIPO DE BENEFICIARIO`,"\\xe3")) %>%
+    filter((`Data Processamento` >= input$data_st[1] & `Data Processamento`<= input$data_st[2]),
+           `TIPO DE BENEFICIARIO` %in% tipo_sel) %>%
+    group_by(`Data Processamento`, !!sym(var_group)) %>%
+    summarise(
+      
+      #total= sum(!!sym(varv),na.rm = TRUE)
+      VD = case_when(
+        input$var_op_st == "Soma" ~ sum(as.numeric(!!sym(varv)),na.rm = TRUE),
+        input$var_op_st == "Média" ~ mean(as.numeric(!!sym(varv)),na.rm = TRUE),
+        input$var_op_st == "Mediana" ~ median(as.numeric(!!sym(varv)),na.rm = TRUE),
+        input$var_op_st == "Máximo" ~ max(as.numeric(!!sym(varv),na.rm = TRUE)))
+    )%>%
+    mutate(VD = trunc(VD)) %>%
+    ungroup() 
+  
+    max_value<- max(df_dygraph$VD)
+    
+    title<- ""
+    if (max_value> 10 ^6) {
+      title<- "Valores em milhões"
+      df_dygraph$VD<- trunc(df_dygraph$VD/10^6)
+    }
+  
+    df_dygraph<-
+    df_dygraph %>%  
+    spread(!!sym(var_group),VD) 
+    
+  
+  
+    
+  
+  #ts_serie_trabalho_prim <- ts(serie_trabalho$Valor[grep("VI. PRIM",serie_trabalho$Rubrica)],start = c(1997,1),end = c(ano_fim,mes_fim),frequency = 12)
+  mes_ini<- as.numeric(substr(input$data_st[1],6,7))
+  ano_ini<- as.numeric(substr(input$data_st[1],1,4))
+  
+  mes_fim<- as.numeric(substr(input$data_st[2],6,7))
+  ano_fim<- as.numeric(substr(input$data_st[2],1,4))
+
+  
+    
+  ts_pensao<- ts(df_dygraph[,-1],start = c(ano_ini,mes_ini),end = c(ano_fim,mes_fim),frequency = 12)
+
+  #df_dygraph <- data.frame(df_dygraph)
+  
+
+  
+    dygraph(ts_pensao,main= title, width="100%") %>%
+    dyRangeSelector() %>%
+    dyAxis(name= 'y', 
+              valueFormatter = 'function(d){return d.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ".");}', axisLabelFormatter = 'function(d){return d.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ".");}') %>% #,valueRange = c(y_min,y_max*1.05)
+    #dyLegend(show = 'follow', hideOnMouseOut = TRUE)%>%
+    dyOptions(connectSeparatedPoints = TRUE, maxNumberWidth = 30)%>%
+    dyOptions( drawGrid = FALSE) %>%
+    dyHighlight(highlightCircleSize = 5)
+  
+  
+})
+
+# renderPlotly({
+# 
+# 
+#   if(is.null(input$var_filtro_st)){
+#     tipo_sel<- get_choices(df_graph)
+#   } else{
+#     tipo_sel<- input$var_filtro_st
+#   }
+#   var_group<- input$var_group
+# 
+#   if(var_group == "Nenhuma"){
+#     df_graph$total <- "Total"
+#     var_group<- "total"
+#   }
+# 
+#   varv<- input$var_v_st
+# 
+# 
+# 
+# 
+#   graph<-
+#     df_graph %>%
+#     mutate(`TIPO DE BENEFICIARIO`= stringr::str_remove_all(`TIPO DE BENEFICIARIO`,"\\xe3")) %>%
+#     filter((`Data Processamento` >= input$data_st[1] & `Data Processamento`<= input$data_st[2]),
+#            `TIPO DE BENEFICIARIO` %in% tipo_sel) %>%
+#     group_by(`Data Processamento`, !!sym(var_group)) %>%
+#     summarise(
+# 
+#       #total= sum(!!sym(varv),na.rm = TRUE)
+#       VD = case_when(
+#         input$var_op_st == "Soma" ~ sum(as.numeric(!!sym(varv)),na.rm = TRUE),
+#         input$var_op_st == "Média" ~ mean(as.numeric(!!sym(varv)),na.rm = TRUE),
+#         input$var_op_st == "Mediana" ~ median(as.numeric(!!sym(varv)),na.rm = TRUE),
+#         input$var_op_st == "Máximo" ~ max(as.numeric(!!sym(varv),na.rm = TRUE)))
+#     )%>%
+#     ungroup() %>%
+#     ggplot(aes(x=`Data Processamento`, y= VD)) +
+#     geom_line(aes(group=!!sym(var_group), color= !!sym(var_group)))+
+#     scale_y_continuous(labels=function(x) format(x, big.mark = ".", scientific = FALSE)) +
+#     scale_x_date()+
+#     scale_color_discrete_qualitative(palette = "Dark 3")+
+#     theme_light()+
+#     theme(
+#       panel.grid = element_blank(),
+#       axis.text.x = element_text()
+# 
+#     )
+# 
+#   graph
+# 
+# 
+# })
+
+```
+
+### Manipule os dados de seu filtro
+```{r}
+library(DT)
+renderDataTable({
+  
+  if(is.null(input$var_filtro_st)){
+    tipo_sel<- get_choices(df_graph)
+  } else{
+    tipo_sel<- input$var_filtro_st
+  }
+  var_group<- input$var_group
+  
+  if(var_group == "Nenhuma"){
+    df_graph$total <- "Total"
+    var_group<- "total"
+  }
+  
+  varv<- input$var_v_st
+  
+  
+  df_dygraph<-
+    df_graph %>%
+    mutate(`TIPO DE BENEFICIARIO`= stringr::str_remove_all(`TIPO DE BENEFICIARIO`,"\\xe3")) %>%
+    filter((`Data Processamento` >= input$data_st[1] & `Data Processamento`<= input$data_st[2]),
+           `TIPO DE BENEFICIARIO` %in% tipo_sel) %>%
+    group_by(`Data Processamento`, !!sym(var_group)) %>%
+    summarise(
+      
+      #total= sum(!!sym(varv),na.rm = TRUE)
+      VD = case_when(
+        input$var_op_st == "Soma" ~ sum(as.numeric(!!sym(varv)),na.rm = TRUE),
+        input$var_op_st == "Média" ~ mean(as.numeric(!!sym(varv)),na.rm = TRUE),
+        input$var_op_st == "Mediana" ~ median(as.numeric(!!sym(varv)),na.rm = TRUE),
+        input$var_op_st == "Máximo" ~ max(as.numeric(!!sym(varv),na.rm = TRUE)))
+    )%>%
+    mutate(VD = trunc(VD)) %>%
+    ungroup() 
+  
+  
+  DT::datatable(
+    
+    df_dygraph,
+    filter = "top",
+    rownames = FALSE,
+    fillContainer = TRUE,
+    
+    extensions = 'Buttons', options = list(
+      dom = 'Bfrtip',
+      #columnDefs = list(list(targets = c(-13), searchable = TRUE)),
+      pageLength = NROW(df_dygraph),
+      buttons = c('copy', 'csv', 'excel', 'pdf', 'print')
+    )
+  ) %>% formatRound(ifelse(NCOL(df_dygraph)==2,2,3),digits = 2, mark=".", dec.mark= ",")%>% formatDate(c(6,11,12),  method =  "toLocaleDateString") 
+  
+  
+})
+```
