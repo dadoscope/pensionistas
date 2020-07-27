@@ -2,13 +2,31 @@ library(purrr)
 library(dplyr)
 library(stringr)
 library(lubridate)
+library(tidyverse)
+
+casos_outlierns_um_mi <- read_excel("casos_outlierns_um_mi.xlsx")
+
+casos_outlierns_um_mi <- casos_outlierns_um_mi[-c(40,41),]
+
+ano_outlier<-unique(casos_outlierns_um_mi$Ano)
+
+casos_outliers<-
+  casos_outlierns_um_mi %>%
+  mutate(data_processamento = paste(Ano,ifelse(as.numeric(Mes)<10,paste0("0",Mes),Mes),"01", sep="-"),
+         `MATRICULA SERVIDOR INSTITUIDOR`= as.numeric(`Matricula Servidor Instituidor`),
+         `NOME DO BENEFICIARIO` = `Nome Do Beneficiario`) %>%
+  select(data_processamento,`MATRICULA SERVIDOR INSTITUIDOR`, `NOME DO BENEFICIARIO`)
 
 
 
+anos<- ano_outlier
+
+processa_outliers<- TRUE
 
 faz_download<- FALSE
-df_pensionista_1994_2019<-
-map_dfr(1994:2019,function(a_ano){
+
+df_pensionista_outlier<-
+map_dfr(anos,function(a_ano){
   
   
   if (faz_download){
@@ -31,6 +49,7 @@ map_dfr(1994:2019,function(a_ano){
   
   meses<- c("01", "02","03","04","05","06","07","08","09","10","11", "12")
   
+  
   map_dfr(meses, function(a_mes){
     
     print(a_mes)
@@ -42,16 +61,39 @@ map_dfr(1994:2019,function(a_ano){
                                 ";", escape_double = FALSE,  
                                 trim_ws = TRUE)
     
-    as.period(interval(start =  dmy('20011936'), end = dmy(paste0("01",a_mes, a_ano)) ))$year
-    as.period(interval(start =  dmy(`DATA DE NASCIMENTO`), end = dmy(paste0("01",a_mes, a_ano)) ))$year
+
+    #data_processamento<- paste0("01",a_mes,a_ano)
+    data_processamento<- paste(a_ano,a_mes,"01", sep="-")
     
+    df_pensionista$data_processamento<- data_processamento
+    
+    if (processa_outliers){
+      df_pensionista<-
+        df_pensionista %>%
+        anti_join(casos_outliers)
+    }
+    
+
     df_pensionista<- 
     df_pensionista %>%
       mutate(`DATA DE NASCIMENTO` = dmy(`DATA DE NASCIMENTO`)) %>%
-      mutate(idade = as.period(interval(start =  `DATA DE NASCIMENTO`, end = dmy(paste0("01",a_mes, a_ano)) ))$year) 
+      mutate(idade = as.period(interval(start =  `DATA DE NASCIMENTO`, end = dmy(paste0("01",a_mes, a_ano)) ))$year)%>%
+      mutate(faixa_etaria = case_when(
+        idade <9 ~"0 a 9",
+        idade %in% 10:19 ~ "10-19",
+        idade %in% 20:29 ~ "20-29",
+        idade %in% 30:39 ~ "30-39",
+        idade %in% 40:49 ~ "40-49",
+        idade %in% 50:59 ~ "50-59",
+        idade %in% 60:69 ~ "60-69",
+        idade %in% 70:79 ~ "70-79",
+        idade>80   ~ "80 ou  mais"
+        
+      ))
       
     
     print(gzfile)
+    
     
     df_pensionista<-
       df_pensionista %>%
@@ -61,9 +103,11 @@ map_dfr(1994:2019,function(a_ano){
              `RENDIMENTO LIQUIDO` = as.numeric(stringr::str_remove_all(`RENDIMENTO LIQUIDO`,","))/100)
     
     
+    
     data_processamento<- paste0("01",a_mes,a_ano)
     
     print(data_processamento)
+    
     
     
     df_pensionista%>%
@@ -74,7 +118,8 @@ map_dfr(1994:2019,function(a_ano){
                 `TIPO PENSAO`,
                 `NATUREZA PENSAO`,
                 tipo_prazo,
-                `PAGAMENTO SUSPENSO`
+                `PAGAMENTO SUSPENSO`,
+                faixa_etaria
       ) %>%
       summarise(
         total_rendimento_bruto = sum(`RENDIMENTO BRUTO`),
@@ -99,25 +144,30 @@ map_dfr(1994:2019,function(a_ano){
 #http://repositorio.dados.gov.br/segrt/pensionistas/012020.zip
 
 
+
 meses<- c("01", "02","03","04","05")
 a_ano<- 2020
-
+faz_download<- FALSE
 df_pensionista_2020<-map_dfr(meses, function(a_mes){
-  address<- paste0("http://repositorio.dados.gov.br/segrt/pensionistas/PENSIONISTAS_", a_mes, a_ano, ".zip")
-  print(address)
   
-  print(a_mes)
-  dest<- paste0("data/",a_ano,"/", "PENSIONISTAS_", a_mes, a_ano,".zip")
-  print(dest)
-  
-  download.file(address, destfile = dest,   mode="wb")
-  
-  
-  
-  unzip(dest, exdir = paste0("data/",a_ano))
-  
-  
-  file.remove(dest)
+  if (faz_download){
+    address<- paste0("http://repositorio.dados.gov.br/segrt/pensionistas/PENSIONISTAS_", a_mes, a_ano, ".zip")
+    print(address)
+    
+    print(a_mes)
+    dest<- paste0("data/",a_ano,"/", "PENSIONISTAS_", a_mes, a_ano,".zip")
+    print(dest)
+    
+    download.file(address, destfile = dest,   mode="wb")
+    
+    
+    
+    unzip(dest, exdir = paste0("data/",a_ano))
+    
+    
+    file.remove(dest)
+
+  }
   
   if (a_mes %in% c("01","02","03")){
     df_file<- paste0("data/2020/arquivo-",a_ano,a_mes,".csv")
@@ -137,6 +187,24 @@ df_pensionista_2020<-map_dfr(meses, function(a_mes){
   
   data_processamento<- paste0("01",a_mes,a_ano)
   
+  df_pensionista<- 
+    df_pensionista %>%
+    mutate(`DATA DE NASCIMENTO` = dmy(`DATA DE NASCIMENTO`)) %>%
+    mutate(idade = as.period(interval(start =  `DATA DE NASCIMENTO`, end = dmy(paste0("01",a_mes, a_ano)) ))$year)%>%
+    mutate(faixa_etaria = case_when(
+      idade <9 ~"0 a 9",
+      idade %in% 10:19 ~ "10-19",
+      idade %in% 20:29 ~ "20-29",
+      idade %in% 30:39 ~ "30-39",
+      idade %in% 40:49 ~ "40-49",
+      idade %in% 50:59 ~ "50-59",
+      idade %in% 60:69 ~ "60-69",
+      idade %in% 70:79 ~ "70-79",
+      idade>80   ~ "80 ou  mais"
+      
+    ))
+  
+  
   
   df_pensionista%>%
     mutate(`Data Processamento` = data_processamento,
@@ -148,7 +216,8 @@ df_pensionista_2020<-map_dfr(meses, function(a_mes){
               `TIPO PENSAO`,
               `NATUREZA PENSAO`,
               tipo_prazo,
-              `PAGAMENTO SUSPENSO`
+              `PAGAMENTO SUSPENSO`,
+              faixa_etaria
     ) %>%
     summarise(
       total_rendimento_bruto = sum(`RENDIMENTO BRUTO`),
@@ -164,6 +233,25 @@ df_pensionista_2020<-map_dfr(meses, function(a_mes){
 })
 
 
+df_pensionista_outlier_COPY<- df_pensionista_outlier
+
+df_pensionista_outlier<-
+  df_pensionista_outlier %>%
+  ungroup() %>%
+  mutate(min_data_inicio_beneficio = dmy(min_data_inicio_beneficio),
+         `Data Processamento` = dmy(`Data Processamento`))
+
+df_trabalho<-
+df_trabalho %>%
+  filter(!(lubridate::year(`Data Processamento`) %in% anos)) %>%
+  bind_rows(df_pensionista_outlier)
+
+saveRDS(df_trabalho, "df_trabalho.rds")
+
+glimpse(df_pensionista_outlier)
+  
+
+
 df_pensionista_total<-
   df_pensionista_1994_1995%>%
   bind_rows(df_pensionista_1996_2019,
@@ -175,6 +263,13 @@ df_pensionista_total %>%
   mutate(min_data_inicio_beneficio = dmy(min_data_inicio_beneficio),
          `Data Processamento` = dmy(`Data Processamento`))
 
+
+saveRDS(df_pensionista_1994_1995, file="df_pensionista_1994_1995_new.rds")
+saveRDS(df_pensionista_1996_2019, file="df_pensionista_1996_2019_new.rds")
+saveRDS(df_pensionista_2020, file="df_pensionista_2020_new.rds")
+saveRDS(df_pensionista_total, file= "df_pensionista_total_new.rds")
+
+write.csv2(df_pensionista_total,file="pensionistas_new.csv")
     
 saveRDS(df_pensionista_1994_1995, file="df_pensionista_1994_1995.rds")
 saveRDS(df_pensionista_1996_2019, file="df_pensionista_1996_2019.rds")
