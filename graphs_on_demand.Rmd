@@ -91,8 +91,8 @@ calcula_valor_constante <- function(df_dados_hist, data_constante ){
 
 df_graph<- readRDS(file="df_trabalho.rds")
 
-# df_graph <- df_graph[,-c(14:17)]
-# 
+#df_graph <- df_graph[,-c(14:17)]
+
 # df_val_rendimento_bruto_atu<-calcula_valor_constante(df_graph[,c(1,8)],"2020-05-01" )
 # #names(df_val_rendimento_bruto_atu)[1]<- "Data Processamento"
 # names(df_val_rendimento_bruto_atu)[1]<- "total_rendimento_bruto_atu"
@@ -117,12 +117,22 @@ df_graph<- readRDS(file="df_trabalho.rds")
 #             df_val_total_rendimento_iquido_atu)
 # 
 # df_trabalho<- df_graph
+# 
+# saveRDS(df_trabalho, "df_trabalho.rds")
+#df_trabalho %>% filter(is.na(`NATUREZA PENSAO`))
 
-#saveRDS(df_trabalho, "df_trabalho.rds")
+#df_trabalho %>% filter(is.na(tipo_prazo))
+
 
 df_graph<- 
   df_graph %>%
-  mutate(`TIPO PENSAO`= str_replace_all(`TIPO PENSAO`, "[^[A-Za-z0-9/%,]]", " ") %>% str_squish(.)  %>% str_replace_all(.," , ", ", "))
+  mutate(`TIPO PENSAO`= str_replace_all(`TIPO PENSAO`, "[^[A-Za-z0-9/%,]]", " ") %>% str_squish(.)  %>% str_replace_all(.," , ", ", "),
+         `TIPO DE BENEFICIARIO` = ifelse(is.na(`TIPO DE BENEFICIARIO`),"NAO INFORMADO",`TIPO DE BENEFICIARIO`),
+         faixa_etaria = ifelse(is.na(faixa_etaria), "Nao calculada", faixa_etaria),
+         `NATUREZA PENSAO`= ifelse(is.na(`NATUREZA PENSAO`), "NAO INFORMADO", `NATUREZA PENSAO`),
+         tipo_prazo = ifelse(is.na(tipo_prazo), "NAO INFORMADO", tipo_prazo),
+         `TIPO PENSAO` = ifelse(is.na(`TIPO PENSAO`), "NAO INFORMADO", `TIPO PENSAO`)
+         )
 
 
   
